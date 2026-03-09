@@ -88,9 +88,25 @@ body{font-family:'IBM Plex Mono',monospace;background:var(--bg);color:var(--text
 .stat-val{font-family:'Oswald',sans-serif;font-size:24px;font-weight:600;color:var(--accent)}
 .stat-label{font-size:9px;color:var(--muted);margin-top:2px}
 .bottom{position:fixed;bottom:0;left:0;right:0;background:linear-gradient(transparent,var(--bg) 25%);padding:16px 16px max(16px,env(safe-area-inset-bottom));display:flex;justify-content:center;gap:10px;z-index:20}
+/* LOCK SCREEN */
+#lockscreen{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#000;z-index:100;touch-action:none;user-select:none;-webkit-user-select:none}
+.lock-info{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;opacity:.3}
+.lock-time{font-family:'Oswald',sans-serif;font-size:48px;font-weight:700;color:#fff;font-variant-numeric:tabular-nums}
+.lock-name{font-size:11px;color:#888;margin-top:4px;max-width:250px}
+.lock-mode{font-size:10px;color:var(--accent);margin-bottom:8px;text-transform:uppercase;letter-spacing:2px}
+.lock-slider{position:absolute;bottom:60px;left:50%;transform:translateX(-50%);width:280px;text-align:center}
+.lock-track{width:100%;height:56px;border-radius:28px;background:#111;border:1px solid #333;position:relative;overflow:hidden}
+.lock-thumb{position:absolute;left:4px;top:4px;width:48px;height:48px;border-radius:24px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:18px;touch-action:none;cursor:grab;transition:left 0.1s;z-index:2}
+.lock-thumb.dragging{transition:none}
+.lock-label{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:'Oswald',sans-serif;font-size:12px;letter-spacing:2px;text-transform:uppercase;color:#444;pointer-events:none;z-index:1}
+.lock-hint{font-size:10px;color:#333;margin-top:12px}
 </style>
 </head>
 <body>
+<div id="lockscreen">
+<div class="lock-info"><div class="lock-mode" id="lock-mode"></div><div class="lock-time" id="lock-time"></div><div class="lock-name" id="lock-name"></div></div>
+<div class="lock-slider"><div class="lock-track"><div class="lock-label">Liu&apos;uta avataksesi &#x279C;</div><div class="lock-thumb" id="lock-thumb">&#x1F513;</div></div><div class="lock-hint">Puhelin taskuun &#x2022; Laske kirkkaus minimiin</div></div>
+</div>
 <div id="app"></div>
 <div class="bottom" id="btm" style="display:none"></div>
 <script>
@@ -505,6 +521,7 @@ initPrograms();
 
 /* ========== STATE ========== */
 var view='home',editProg=null,homeTab='programs',libSearch='',libCat='',prepProg=null,editLibCat=-1,editLibEx=-1;
+var isLocked=false;
 var W={phase:'idle',progName:'',exercises:[],workSec:45,restSec:10,exIdx:0,mode:'work',timeLeft:0,totalStart:null,exDurs:[],paused:false,pausedAt:0,pauseTotal:0};
 var timer=null;
 var wakeLock=null;
@@ -557,8 +574,85 @@ function goLib(){view='lib';libSearch='';libCat='';render();}
 function goPrep(progId){var progs=getPrograms()||[];prepProg=null;for(var i=0;i<progs.length;i++){if(progs[i].id===progId){prepProg=progs[i];break;}}if(!prepProg)return;view='prep';render();}
 function saveProg(){if(!editProg.name.trim())return;editProg.exercises=editProg.exercises.filter(function(e){return e.name.trim();});if(!editProg.exercises.length)return;var progs=getPrograms()||[];var idx=-1;for(var i=0;i<progs.length;i++){if(progs[i].id===editProg.id){idx=i;break;}}if(idx>=0)progs[idx]=editProg;else progs.push(editProg);savePrograms(progs);goHome();}
 function clearAllTimers(){clearInterval(timer);timer=null;}
-function stopWorkout(){clearAllTimers();W.phase='idle';W.paused=false;try{speechSynthesis.cancel();}catch(e){}releaseWakeLock();}
+function stopWorkout(){clearAllTimers();W.phase='idle';W.paused=false;try{speechSynthesis.cancel();}catch(e){}releaseWakeLock();unlockScreen();}
 
+function lockScreen(){
+  isLocked=true;
+  var ls=document.getElementById('lockscreen');
+  ls.style.display='block';
+  updateLockInfo();
+  try{screen.orientation.lock('portrait');}catch(e){}
+}
+function unlockScreen(){
+  isLocked=false;
+  var ls=document.getElementById('lockscreen');
+  ls.style.display='none';
+  var thumb=document.getElementById('lock-thumb');
+  if(thumb)thumb.style.left='4px';
+}
+function updateLockInfo(){
+  if(!isLocked)return;
+  var modeEl=document.getElementById('lock-mode');
+  var timeEl=document.getElementById('lock-time');
+  var nameEl=document.getElementById('lock-name');
+  if(!modeEl)return;
+  if(W.phase!=='active'){unlockScreen();return;}
+  var ex=W.exercises[W.exIdx];
+  if(W.paused){modeEl.textContent='Tauolla';timeEl.textContent=W.timeLeft;nameEl.textContent=ex?ex.name:'';}
+  else if(W.mode==='work'){modeEl.textContent='\u{1F525} Ty\u00f6';timeEl.textContent=W.timeLeft;nameEl.textContent=ex?ex.name:'';}
+  else if(W.mode==='rest'){modeEl.textContent='\u{1F9D8} Tauko';timeEl.textContent=W.timeLeft;var next=W.exercises[W.exIdx+1];nameEl.textContent=next?('Seuraava: '+next.name):'';}
+  else if(W.mode==='countdown'){modeEl.textContent='Valmistaudu';timeEl.textContent=W.timeLeft;nameEl.textContent=ex?ex.name:'';}
+}
+
+/* SLIDE TO UNLOCK */
+(function(){
+  var thumb=document.getElementById('lock-thumb');
+  var track=thumb?thumb.parentElement:null;
+  var dragging=false,startX=0,thumbLeft=0,trackW=0,thumbW=48;
+  function onStart(e){
+    if(!isLocked)return;
+    dragging=true;
+    thumb.classList.add('dragging');
+    var t=e.touches?e.touches[0]:e;
+    startX=t.clientX;
+    thumbLeft=4;
+    trackW=track.offsetWidth;
+    e.preventDefault();
+  }
+  function onMove(e){
+    if(!dragging)return;
+    var t=e.touches?e.touches[0]:e;
+    var dx=t.clientX-startX;
+    var newL=Math.max(4,Math.min(thumbLeft+dx,trackW-thumbW-4));
+    thumb.style.left=newL+'px';
+    e.preventDefault();
+  }
+  function onEnd(e){
+    if(!dragging)return;
+    dragging=false;
+    thumb.classList.remove('dragging');
+    var cur=parseInt(thumb.style.left)||4;
+    if(cur>trackW-thumbW-30){
+      unlockScreen();
+      try{navigator.vibrate(100);}catch(ex){}
+    }else{
+      thumb.style.left='4px';
+    }
+  }
+  if(thumb){
+    thumb.addEventListener('touchstart',onStart,{passive:false});
+    thumb.addEventListener('mousedown',onStart);
+    document.addEventListener('touchmove',onMove,{passive:false});
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('touchend',onEnd);
+    document.addEventListener('mouseup',onEnd);
+  }
+  /* Block all other touches on lock screen */
+  var lsEl=document.getElementById('lockscreen');
+  if(lsEl){lsEl.addEventListener('touchstart',function(e){
+    if(e.target!==thumb&&!thumb.contains(e.target)){e.preventDefault();e.stopPropagation();}
+  },{passive:false});}
+})();
 function startWorkout(progId){
   initAudio();requestWakeLock();var progs=getPrograms()||[];var prog=null;
   for(var i=0;i<progs.length;i++){if(progs[i].id===progId){prog=progs[i];break;}}
@@ -588,9 +682,9 @@ function tick(){
   if(W.mode==='countdown'){if(W.timeLeft<=0){W.mode='work';W.timeLeft=exSec;speakExercise(ex,exSec);longBeep();}else if(W.timeLeft<=3)shortBeep();}
   else if(W.mode==='work'){if(W.timeLeft<=0){W.exDurs.push({name:ex.name,dur:exSec*1000});if(W.exIdx>=W.exercises.length-1){finishWorkout();return;}W.mode='rest';W.timeLeft=W.restSec;longBeep();var next=W.exercises[W.exIdx+1];var msg='Tauko. Seuraavaksi: '+next.name+'.';if(next.weight)msg+=' '+next.weight+' kiloa.';speak(msg);}else if(W.timeLeft<=5){shortBeep();if(W.timeLeft===5)speak('Viisi');}}
   else if(W.mode==='rest'){if(W.timeLeft<=0){W.exIdx++;ex=W.exercises[W.exIdx];exSec=(ex.sec&&ex.sec>0)?ex.sec:W.workSec;W.mode='work';W.timeLeft=exSec;longBeep();speakExercise(ex,exSec);}else if(W.timeLeft<=3)shortBeep();}
-  render();}
+  render();updateLockInfo();}
 
-function finishWorkout(){clearAllTimers();W.phase='finished';W.paused=false;releaseWakeLock();var dur=Date.now()-W.totalStart-W.pauseTotal;speak('Treeni valmis! Kokonaisaika '+Math.floor(dur/60000)+' minuuttia. Hienoa!');longBeep();setTimeout(function(){longBeep();},300);saveHistory({date:new Date().toISOString(),dur:dur,progName:W.progName,count:W.exercises.length});render();}
+function finishWorkout(){clearAllTimers();W.phase='finished';W.paused=false;releaseWakeLock();unlockScreen();var dur=Date.now()-W.totalStart-W.pauseTotal;speak('Treeni valmis! Kokonaisaika '+Math.floor(dur/60000)+' minuuttia. Hienoa!');longBeep();setTimeout(function(){longBeep();},300);saveHistory({date:new Date().toISOString(),dur:dur,progName:W.progName,count:W.exercises.length});render();}
 function skipEx(){var ex=W.exercises[W.exIdx];var exSec=(ex.sec&&ex.sec>0)?ex.sec:W.workSec;if(W.mode==='work'){W.exDurs.push({name:ex.name,dur:(exSec-W.timeLeft)*1000});if(W.exIdx>=W.exercises.length-1){finishWorkout();return;}W.mode='rest';W.timeLeft=W.restSec;speak('Ohitettu. Seuraavaksi: '+W.exercises[W.exIdx+1].name+'.');}else if(W.mode==='rest'){W.exIdx++;var ex2=W.exercises[W.exIdx];var s2=(ex2.sec&&ex2.sec>0)?ex2.sec:W.workSec;W.mode='work';W.timeLeft=s2;longBeep();speakExercise(ex2,s2);}render();}
 
 /* ========== EVENTS ========== */
@@ -617,6 +711,7 @@ document.addEventListener('click',function(e){
   else if(a==='skip')skipEx();
   else if(a==='pause')pauseWorkout();
   else if(a==='resume')resumeWorkout();
+  else if(a==='lock')lockScreen();
   else if(a==='reset')goHome();
   else if(a==='clearhist'){store.del('pt3_hist');render();}
   else if(a==='libedit'){editLibCat=+v;editLibEx=+v2;render();}
@@ -702,7 +797,7 @@ function renderWorkout(app,btm){
   else if(isR){h2+='<div style="margin-top:20px"><div class="w-phase rest">\u{1F9D8} Tauko</div><div class="w-timer-rest">'+W.timeLeft+'</div>';if(W.exIdx+1<W.exercises.length){var next=W.exercises[W.exIdx+1];h2+='<div class="w-next"><div class="w-next-label">Seuraavaksi</div><div class="w-next-name">'+esc(next.name)+'</div>';var nt=equipText(next);if(nt)h2+='<div class="w-next-weight">'+esc(nt)+'</div>';h2+='</div>';}h2+='</div>';}
   app.innerHTML=h2;
   if(W.paused){btm.innerHTML='<button class="btn danger" data-action="stop">Lopeta</button><button class="btn primary" data-action="resume">\u25B6 Jatka</button>';}
-  else{btm.innerHTML='<button class="btn danger" data-action="stop">Lopeta</button><button class="btn sm" data-action="pause">\u23F8 Tauko</button><button class="btn sm" data-action="skip">Ohita \u2192</button>';}}
+  else{btm.innerHTML='<button class="btn danger" data-action="stop">Lopeta</button><button class="btn sm" data-action="pause">\u23F8 Tauko</button><button class="btn sm" data-action="skip">Ohita \u2192</button><button class="btn sm" data-action="lock" style="background:#222;border-color:#444;color:#888">\u{1F512}</button>';}}
 
 render();
 })();
